@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 # FIXME: move this to v3bwfile?
 class V3BWLine:
     # TODO: docstrings
-    def __init__(self, fp, bw, nick, rtts, last_time):
+    def __init__(self, fp, bw, nick, rtts, last_time, ed25519=None):
         # TODO: asserts checking arg types
         self.fp = fp
         self.nick = nick
@@ -24,6 +24,7 @@ class V3BWLine:
         rtts = [round(r * 1000) for r in rtts]
         self.rtt = round(median(rtts))
         self.time = unixts_to_isodt_str(last_time)
+        self.ed25519 = ed25519
 
     def __str__(self):
         frmt = 'node_id=${fp} bw={sp} nick={n} rtt={rtt} time={t}'

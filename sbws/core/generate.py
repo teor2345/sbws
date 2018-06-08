@@ -28,8 +28,11 @@ class V3BWLine:
 
     def __str__(self):
         frmt = 'node_id=${fp} bw={sp} nick={n} rtt={rtt} time={t}'
-        return frmt.format(fp=self.fp, sp=self.bw, n=self.nick, rtt=self.rtt,
-                           t=self.time)
+        s = frmt.format(fp=self.fp, sp=self.bw, n=self.nick, rtt=self.rtt,
+                        t=self.time)
+        if self.ed25519:
+            s += ' ed25519={ed}'.format(ed=self.ed25519)
+        return s
 
 
 def result_data_to_v3bw_line(data, fingerprint):
@@ -39,12 +42,13 @@ def result_data_to_v3bw_line(data, fingerprint):
         assert isinstance(res, ResultSuccess)
     results = data[fingerprint]
     nick = results[0].nickname
+    ed25519 = results[0].ed25519_master_key
     speeds = [dl['amount'] / dl['duration']
               for r in results for dl in r.downloads]
     speed = median(speeds)
     rtts = [rtt for r in results for rtt in r.rtts]
     last_time = round(max([r.time for r in results]))
-    return V3BWLine(fingerprint, speed, nick, rtts, last_time)
+    return V3BWLine(fingerprint, speed, nick, rtts, last_time, ed25519=ed25519)
 
 
 def warn_if_not_accurate_enough(lines, constant):

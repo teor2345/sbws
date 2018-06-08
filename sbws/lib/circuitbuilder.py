@@ -2,7 +2,7 @@ from stem import CircuitExtensionFailed, InvalidRequest, ProtocolError, Timeout
 from stem import InvalidArguments
 import random
 import sbws.util.stem as stem_utils
-from .relaylist import RelayList
+from .relaylist import Relay, RelayList
 import logging
 
 log = logging.getLogger(__name__)
@@ -125,9 +125,9 @@ class GapsCircuitBuilder(CircuitBuilder):
             if not fp:
                 new_path.append(None)
                 continue
-            relay = stem_utils.fp_or_nick_to_relay(self.controller, fp)
-            if not relay:
-                log.debug('Failed to get descriptor for relay %s', fp)
+            relay = Relay(fp, self.controller)
+            if not relay.fingerprint:
+                log.debug('Tor seems to no longer think %s is a relay', fp)
                 return None
             new_path.append(relay)
         return new_path
@@ -147,8 +147,7 @@ class GapsCircuitBuilder(CircuitBuilder):
                 continue
             chosen_fps.append(choice)
             black_fps.append(choice)
-        return [stem_utils.fp_or_nick_to_relay(self.controller, fp)
-                for fp in chosen_fps]
+        return [Relay(fp, self.controller) for fp in chosen_fps]
 
     def build_circuit(self, path):
         ''' <path> is a list of relays and Falsey values. Relays can be

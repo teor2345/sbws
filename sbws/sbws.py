@@ -8,6 +8,7 @@ from sbws.util.config import validate_config
 from sbws.util.config import configure_logging
 from sbws.util.parser import create_parser
 import logging
+import cProfile
 
 log = logging.getLogger(__name__)
 
@@ -43,11 +44,16 @@ def main():
         'stats': {'f': sbws.core.stats.main,
                   'a': def_args, 'kw': def_kwargs},
     }
+    pr = cProfile.Profile()
+    pr.enable()
     try:
         if args.command not in known_commands:
             parser.print_help()
         else:
             comm = known_commands[args.command]
-            exit(comm['f'](*comm['a'], **comm['kw']))
+            comm['f'](*comm['a'], **comm['kw'])
     except KeyboardInterrupt:
         print('')
+    finally:
+        pr.disable()
+        pr.dump_stats('profile/main.dat')

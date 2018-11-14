@@ -14,7 +14,8 @@ from sbws import __version__
 from sbws.globals import (SPEC_VERSION, BW_LINE_SIZE, SBWS_SCALE_CONSTANT,
                           TORFLOW_SCALING, SBWS_SCALING, TORFLOW_BW_MARGIN,
                           TORFLOW_OBS_LAST, TORFLOW_OBS_MEAN,
-                          TORFLOW_ROUND_DIG, MIN_REPORT, MAX_BW_DIFF_PERC)
+                          TORFLOW_ROUNDING, PROP276_ROUNDING,
+                          PROP276_ROUND_DIG, MIN_REPORT, MAX_BW_DIFF_PERC)
 from sbws.lib.resultdump import ResultSuccess, _ResultType
 from sbws.util.filelock import DirectoryLock
 from sbws.util.timestamp import (now_isodt_str, unixts_to_isodt_str,
@@ -58,25 +59,103 @@ BW_KEYVALUES_INT = ['bw', 'rtt', 'success', 'error_stream',
 BW_KEYVALUES = BW_KEYVALUES_BASIC + BW_KEYVALUES_EXTRA
 
 
-def round_sig_dig(n, digits=TORFLOW_ROUND_DIG):
+def count_digits(n):
+    """Count the number of decimal digits in the integer n.
+
+       n must be less than or equal to 2**73, to avoid floating point errors.
+       """
+    n = int(abs(n))
+    if n == 0:
+        return 1
+    else:
+        return int(math.log10(n)) + 1
+
+
+def get_digit(n, digit):
+    """Get digit from an integer n, counting non-zero digits
+       from most significant to least significant.
+       Returns an integer between 0 and 9.
+
+       digit must be greater than 0, and less than or equal to the number
+       of digits in n.
+       n must be less than or equal to 2**73, to avoid floating point errors.
+       """
+    n = int(abs(n))
+    digit = int(digit)
+    assert digit >= 1
+    digits_in_n = count_digits(n)
+    assert digit <= digits_in_n
+    n_digit = (n // (10 ** (digit - 1))) % 10
+    n_digit = int(n_digit)
+    assert n_digit >= 0
+    assert n_digit <= 9
+    return n_digit
+
+
+def round_sig_dig(n, digits=PROP276_ROUND_DIG, last_sig_dig_multiple=1):
     """Round n to 'digits' significant digits in front of the decimal point.
+       Round the last digit to the nearest multiple of last_sig_dig_multiple.
        Results less than or equal to 1 are rounded to 1.
+       Returns an integer.
+
+       digits must be greater than 0.
+       last_sig_dig_multiple must be between 1 and 9.
+       n must be less than or equal to 2**73, to avoid floating point errors.
+       """
+    digits = int(digits)
+    assert digits >= 1
+    last_sig_dig_multiple = int(last_sig_dig_multiple)
+    assert last_sig_dig_multiple >= 1
+    assert last_sig_dig_multiple <= 9
+    if n <= 1:
+        return 1
+    digits_in_n = count_digits(n)
+    round_digits = max(digits_in_n - digits, 0)
+    # scale n so that all digits before the decimal point are significant
+    # scale by a power of 10
+    scaled_n = n / (10.0 ** round_digits)
+    # scale by the last significant digit multiple
+    divided_n = scaled_n / last_sig_dig_multiple
+    # round to the nearest significant multiple
+    rounded_n = int(round(divided_n, 0))
+    # and reconstruct n
+    multiplied_n = rounded_n * last_sig_dig_multiple
+    unscaled_n = multiplied_n * (10 ** round_digits)
+    return unscaled_n
+
+
+def round_prop276_dig(n, digits=PROP276_ROUND_DIG):
+    """Round n to 'digits' significant digits in front of the decimal point,
+       then round the last significant digit according to proposal 276:
+         for values beginning with decimal "2" through "4", we should round
+         the (significant) digits to the nearest multiple of 2.
+         For values beginning with decimal "5" though "9", we should round
+         to the nearest multiple of 5.
+
+       Results less than or equal to 1 are rounded to 1.
+       Single-digit numbers are rounded to 1, 2, 4, 5, or 10.
        Returns an integer.
 
        digits must be greater than 0.
        n must be less than or equal to 2**73, to avoid floating point errors.
        """
-    assert digits >= 1
-    if n <= 1:
-        return 1
     digits = int(digits)
-    digits_in_n = int(math.log10(n)) + 1
-    round_digits = max(digits_in_n - digits, 0)
-    rounded_n = round(n, -round_digits)
-    return int(rounded_n)
+    assert digits >= 1
+    # we check the first digit of the truncated value
+    # if we used the first digit of the rounded value,
+    # then 19.5 would round to 18
+    first_digit = get_digit(max(int(n), 1), 1)
+    if first_digit <= 1:
+        return round_sig_dig(n, digits=digits, last_sig_dig_multiple=1)
+    elif first_digit <= 4:
+        return round_sig_dig(n, digits=digits, last_sig_dig_multiple=2)
+    else:
+        assert(first_digit <= 9)
+        return round_sig_dig(n, digits=digits, last_sig_dig_multiple=5)
 
 
-def kb_round_x_sig_dig(bw_bs, digits=TORFLOW_ROUND_DIG):
+def kb_round_x_sig_dig(bw_bs, digits=PROP276_ROUND_DIG,
+                       rounding_method=PROP276_ROUNDING):
     """Convert bw_bs from bytes to kilobytes, and round the result to
        'digits' significant digits.
        Results less than or equal to 1 are rounded up to 1.
@@ -87,7 +166,12 @@ def kb_round_x_sig_dig(bw_bs, digits=TORFLOW_ROUND_DIG):
        """
     # avoid double-rounding by using floating-point
     bw_kb = bw_bs / 1000.0
-    return round_sig_dig(bw_kb, digits=digits)
+    if rounding_method is None:
+        return int(bw_kb)
+    elif rounding_method != PROP276_ROUNDING:
+        return round_sig_dig(bw_kb, digits=digits)
+    else:
+        return round_prop276_dig(bw_kb, digits=digits)
 
 
 def num_results_of_type(results, type_str):
@@ -485,9 +569,11 @@ class V3BWFile(object):
     @classmethod
     def from_results(cls, results, state_fpath='',
                      scale_constant=SBWS_SCALE_CONSTANT,
-                     scaling_method=None, torflow_obs=TORFLOW_OBS_LAST,
+                     scaling_method=None,
+                     rounding_method=PROP276_ROUNDING,
+                     torflow_obs=TORFLOW_OBS_LAST,
                      torflow_cap=TORFLOW_BW_MARGIN,
-                     torflow_round_digs=TORFLOW_ROUND_DIG,
+                     torflow_round_digs=PROP276_ROUND_DIG,
                      secs_recent=None, secs_away=None, min_num=0,
                      consensus_path=None, max_bw_diff_perc=MAX_BW_DIFF_PERC,
                      reverse=False):
@@ -497,8 +583,11 @@ class V3BWFile(object):
         :param str state_fpath: path to the state file
         :param int scaling_method:
             Scaling method to obtain the bandwidth
-            Posiable values: {NONE, SBWS_SCALING, TORFLOW_SCALING} = {0, 1, 2}
+            Possible values: {None, SBWS_SCALING, TORFLOW_SCALING} = {0, 1, 2}
         :param int scale_constant: sbws scaling constant
+        :param int rounding_method:
+            Rounding method to obtain the bandwidth
+            Possible values: {None, TORFLOW_ROUNDING, PROP276_ROUNDING}
         :param int torflow_obs: method to choose descriptor observed bandwidth
         :param bool reverse: whether to sort the bw lines descending or not
 
@@ -534,7 +623,8 @@ class V3BWFile(object):
             # log.debug(bw_lines[-1])
         elif scaling_method == TORFLOW_SCALING:
             bw_lines = cls.bw_torflow_scale(bw_lines_raw, torflow_obs,
-                                            torflow_cap, torflow_round_digs)
+                                            torflow_cap, torflow_round_digs,
+                                            rounding_method)
             # log.debug(bw_lines[-1])
             cls.update_progress(
                 cls, bw_lines, header, number_consensus_relays, state)
@@ -639,7 +729,9 @@ class V3BWFile(object):
     @staticmethod
     def bw_torflow_scale(bw_lines, desc_bw_obs_type=TORFLOW_OBS_MEAN,
                          cap=TORFLOW_BW_MARGIN,
-                         num_round_dig=TORFLOW_ROUND_DIG, reverse=False):
+                         num_round_dig=PROP276_ROUND_DIG,
+                         rounding_method=PROP276_ROUNDING,
+                         reverse=False):
         """
         Obtain final bandwidth measurements applying Torflow's scaling
         method.
@@ -813,7 +905,8 @@ class V3BWFile(object):
                     l.bw_mean / mu,  # ratio
                     max(l.bw_mean, mu) / muf  # ratio filtered
                     ) * desc_bw_obs, \
-                digits=num_round_dig)  # convert to KB
+                digits=num_round_dig,
+                rounding_method=rounding_method)  # convert to KB
             # Cap maximum bw
             if cap is not None:
                 bw_new = min(hlimit, bw_new)

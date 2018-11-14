@@ -1,7 +1,8 @@
 from math import ceil
 
 from sbws.globals import (fail_hard, SBWS_SCALE_CONSTANT, TORFLOW_SCALING,
-                          SBWS_SCALING, TORFLOW_BW_MARGIN, TORFLOW_ROUND_DIG,
+                          SBWS_SCALING, TORFLOW_BW_MARGIN, TORFLOW_ROUNDING,
+                          PROP276_ROUNDING, PROP276_ROUND_DIG,
                           DAY_SECS, NUM_MIN_RESULTS)
 from sbws.lib.v3bwfile import V3BWFile
 from sbws.lib.resultdump import load_recent_results_in_datadir
@@ -50,10 +51,14 @@ def gen_parser(sub):
     p.add_argument('-m', '--torflow-bw-margin', default=TORFLOW_BW_MARGIN,
                    type=float,
                    help="Cap maximum bw when scaling as Torflow. ")
-    p.add_argument('-r', '--torflow-round-digs', default=TORFLOW_ROUND_DIG,
-                   type=int,
-                   help="Number of most significant digits to round bw "
-                        "when scaling as Torflow.")
+    p.add_argument('-r', '--round-digs', '--torflow-round-digs',
+                   default=PROP276_ROUND_DIG, type=int,
+                   help="Number of most significant digits to round bw.")
+    p.add_argument('-s', '--smooth-round', action='store_const',
+                   default=True, const=False,
+                   help='If specified, smooth the gaps between rounded '
+                   'bandwidths by rounding the last digit as specified in '
+                   'proposal 276.')
     p.add_argument('-p', '--secs-recent', default=None, type=int,
                    help="How many secs in the past are results being "
                         "still considered. Note this value will supersede "
@@ -81,6 +86,14 @@ def main(args, conf):
         scaling_method = None
     else:
         scaling_method = TORFLOW_SCALING
+    if args.smooth_round:
+        rounding_method = PROP276_ROUNDING
+    elif args.raw:
+        rounding_method = None
+    elif args.scale_sbws:
+        rounding_method = None
+    else:
+        rounding_method = TORFLOW_ROUNDING
     if args.secs_recent:
         fresh_days = ceil(args.secs_recent / 24 / 60 / 60)
     else:
@@ -100,6 +113,7 @@ def main(args, conf):
                                   "cached-consensus")
     bw_file = V3BWFile.from_results(results, state_fpath, args.scale_constant,
                                     scaling_method,
+                                    rounding_method=rounding_method,
                                     torflow_cap=args.torflow_bw_margin,
                                     torflow_round_digs=args.torflow_round_digs,
                                     secs_recent=args.secs_recent,

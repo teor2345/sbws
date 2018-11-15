@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
   than rounding to the nearest 1000 kilobytes (#28442).
 - Make sbws round to 2 significant figures by default. This implements part
   of proposal 276 (#28451).
+- Add a proposal 276 rounding mode, which smooths the gaps between rounded
+  values by rounding the last significant digit. Activate this mode by
+  default. This implements the rest of proposal 276 (#28452).
 
 ## [1.0.2] - 2018-11-10
 
